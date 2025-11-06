@@ -7,12 +7,13 @@ import { getFirestore, Firestore } from "firebase/firestore";
 
 // TODO: Add your own Firebase configuration from your project settings
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDWRbtZs5CT5EFbUJ7_JqX3OlqASCjZFt0",
+  authDomain: "semesmart-b51d3.firebaseapp.com",
+  projectId: "semesmart-b51d3",
+  storageBucket: "semesmart-b51d3.firebasestorage.app",
+  messagingSenderId: "105358128593",
+  appId: "1:105358128593:web:8b4b1d93841ca6f39e1cf0",
+  measurementId: "G-680B90R2P3"
 };
 
 // Initialize Firebase
