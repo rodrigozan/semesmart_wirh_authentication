@@ -1,9 +1,11 @@
-
-
 import React, { useState } from 'react';
-import api from '../api';
+import api from '../api'; // Mantenha sua API existente para login/registro com email/senha
 import { GoogleIcon } from './common/Icons';
 import SocialLoginSimulationModal from './modals/SocialLoginSimulationModal';
+
+// Importações do Firebase Auth
+import { signInWithPopup, signInWithRedirect, GoogleAuthProvider, getAuth, AuthError } from "firebase/auth";
+import { auth } from '../firebaseConfig'; // Importe a instância de auth que você exportou
 
 const familyTitles = ['Pai', 'Mãe', 'Filho', 'Filha', 'Avô', 'Avó', 'Tio', 'Tia', 'Outro'];
 
@@ -14,7 +16,7 @@ const Auth: React.FC = () => {
   const [name, setName] = useState('');
   const [title, setTitle] = useState('Pai');
   const [error, setError] = useState('');
-  const [isSocialLoginModalOpen, setSocialLoginModalOpen] = useState(false);
+  // const [isSocialLoginModalOpen, setSocialLoginModalOpen] = useState(false); // Não precisará mais
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -30,7 +32,8 @@ const Auth: React.FC = () => {
         }
         // onAuthStateChanged in App.tsx will handle the navigation
     } catch (err: any) {
-        if (err.code) { // Firebase errors have a 'code' property
+        // Se for um erro do Firebase, use o tipo AuthError para melhor tratamento
+        if (err.code) {
             switch (err.code) {
                 case 'auth/user-not-found':
                 case 'auth/wrong-password':
@@ -43,8 +46,12 @@ const Auth: React.FC = () => {
                 case 'auth/weak-password':
                     setError('A senha deve ter pelo menos 6 caracteres.');
                     break;
+                case 'auth/popup-closed-by-user':
+                    setError('Login com Google cancelado pelo usuário.');
+                    break;
+                // Adicione outros códigos de erro do Firebase que você queira tratar
                 default:
-                    setError('Ocorreu um erro. Tente novamente.');
+                    setError('Ocorreu um erro no Firebase: ' + err.message);
             }
         } else {
             setError(err.message || 'Ocorreu um erro.');
@@ -53,12 +60,47 @@ const Auth: React.FC = () => {
         setIsLoading(false);
     }
   };
-  
-  const handleSocialLoginSubmit = async (socialEmail: string) => {
-    // This is a simulation. A real implementation would use Firebase's GoogleAuthProvider
-    setError('Login social não implementado nesta demonstração.');
-    setSocialLoginModalOpen(false);
+
+  // NOVO: Função para login com Google
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setIsLoading(true);
+    try {
+      const provider = new GoogleAuthProvider();
+      // Você pode usar signInWithPopup para um pop-up ou signInWithRedirect para redirecionamento
+      // signInWithRedirect é geralmente melhor para navegadores que bloqueiam pop-ups e para mobile
+      await signInWithRedirect(auth, provider);
+      // Redirecionamentos são tratados pelo Firebase globalmente, então o código abaixo não será executado imediatamente
+      // O seu listener onAuthStateChanged (se estiver em App.tsx) será acionado após o redirecionamento.
+    } catch (err: any) {
+        // Trate erros específicos do Firebase Auth
+        if (err && (err as any).code) {
+            switch ((err as any).code) {
+                case 'auth/popup-closed-by-user':
+                    setError('Login com Google cancelado.');
+                    break;
+                case 'auth/cancelled-popup-request':
+                    setError('Outro pedido de pop-up já está em andamento.');
+                    break;
+                case 'auth/operation-not-allowed':
+                    setError('Login com Google não está habilitado. Verifique as configurações do Firebase.');
+                    break;
+                case 'auth/account-exists-with-different-credential':
+                    setError('Já existe uma conta com este e-mail usando outro método de login.');
+                    break;
+                default:
+                    setError(`Erro ao fazer login com Google: ${err.message}`);
+            }
+        } else {
+            setError('Ocorreu um erro inesperado ao tentar login com Google.');
+        }
+        console.error("Erro Google Sign-In:", err);
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  // Remover a função handleSocialLoginSubmit e o SocialLoginSimulationModal
 
   return (
     <>
@@ -78,7 +120,7 @@ const Auth: React.FC = () => {
             </div>
             <p className="text-gray-500 mt-4">Semear o futuro financeiro da sua família.</p>
           </div>
-          
+
           <form onSubmit={handleSubmit} className="space-y-4">
             {!isLogin && (
                 <>
@@ -103,7 +145,7 @@ const Auth: React.FC = () => {
               <label htmlFor="password"  className="block text-sm font-medium text-gray-700">Senha</label>
               <input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
             </div>
-            
+
             {error && <p className="text-sm text-red-600 text-center">{error}</p>}
 
             <div className="pt-2">
@@ -131,7 +173,7 @@ const Auth: React.FC = () => {
           <div>
               <button
                   type="button"
-                  onClick={() => setSocialLoginModalOpen(true)}
+                  onClick={handleGoogleSignIn} // Chama a nova função do Firebase
                   disabled={isLoading}
                   className="w-full inline-flex justify-center items-center gap-3 py-2.5 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
@@ -147,13 +189,14 @@ const Auth: React.FC = () => {
           </div>
         </div>
       </div>
-      
-      {isSocialLoginModalOpen && (
-        <SocialLoginSimulationModal 
+
+      {/* Você pode remover o SocialLoginSimulationModal, pois não é mais necessário */}
+      {/* {isSocialLoginModalOpen && (
+        <SocialLoginSimulationModal
           onClose={() => setSocialLoginModalOpen(false)}
           onSubmit={handleSocialLoginSubmit}
         />
-      )}
+      )} */}
     </>
   );
 };

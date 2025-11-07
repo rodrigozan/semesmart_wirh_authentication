@@ -27,12 +27,14 @@ export interface Member {
   avatar: string;
   role: MemberRole;
   title: string;
+  email?: string; 
   incomeSource?: string;
 }
 
 export interface FamilyProfile {
   name: string;
-  avatar: string;
+  avatar?: string;
+  createdAt: Date | string;
 }
 
 export interface Transaction {
@@ -45,6 +47,7 @@ export interface Transaction {
   paymentMethod?: PaymentMethod;
   location?: string;
   incomeSource?: string;
+  type: 'income' | 'expense';
 }
 
 export interface Goal {

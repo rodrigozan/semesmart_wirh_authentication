@@ -1,8 +1,7 @@
-
-import React, { useState, useEffect } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth } from './firebaseConfig';
-import api from './api';
+import React, { useState, useEffect, useCallback } from 'react';
+import { onAuthStateChanged, User, getRedirectResult, GoogleAuthProvider } from 'firebase/auth'; // Importamos getRedirectResult e GoogleAuthProvider
+import { auth } from './firebaseConfig'; // Sua instância de auth
+import api from './api'; // Assumimos que 'api' lida com operações de Firestore/dados do usuário
 import Header from './components/common/Header';
 import BottomNav from './components/common/BottomNav';
 import Dashboard from './components/Dashboard';
@@ -15,6 +14,7 @@ import CreateTransactionModal from './components/modals/CreateTransactionModal';
 import Auth from './components/Auth';
 import PostOnboardingModal from './components/modals/PostOnboardingModal';
 import { Goal, Challenge, Transaction, Member, Card, FamilyProfile, UserData } from './types';
+import { defaultUserData } from "./constants/defaults";
 
 type Screen = 'inicio' | 'gastos' | 'relatorios' | 'metas' | 'perfil';
 
@@ -55,37 +55,89 @@ const App: React.FC = () => {
   const [isPostOnboardingModalOpen, setPostOnboardingModalOpen] = useState(false);
   const [startMemberSetup, setStartMemberSetup] = useState(false);
   
-  // Listen for Firebase auth state changes
-  useEffect(() => {
-    // auth can be null if firebase is not configured
-    if (!auth) {
-      setAuthLoading(false);
-      return;
+  // Função centralizada para buscar dados do usuário (useCallback para otimização)
+  const fetchUserData = useCallback(async (user: User) => {
+    setDataLoading(true);
+    try {
+      const data = await api.getUserData(user.uid);
+      console.log("Dados do usuário carregados:", data);
+      setUserData(data);
+      if (data && !data.hasSeenOnboarding) {
+        setOnboardingOpen(true);
+      }
+      // Após um login bem-sucedido (incluindo via redirecionamento) ou carregamento de dados,
+      // definimos a tela ativa para o dashboard.
+      setActiveScreen('inicio'); 
+    } catch (error) {
+      console.error("Falha ao carregar dados do usuário:", error);
+      setUserData(null); // Define userData como null para indicar erro no carregamento
+    } finally {
+      setDataLoading(false);
     }
+  }, []); // Sem dependências para que a função seja estável
+
+  // Escuta por mudanças no estado de autenticação do Firebase
+  useEffect(() => {
+  if (!auth) {
+    setAuthLoading(false);
+    return;
+  }
+
+  const initAuth = async () => {
+    try {
+      // 1️⃣ Primeiro: processa o resultado do redirect
+      const result = await getRedirectResult(auth);
+      if (result?.user) {
+        console.log("✅ Login Google via redirect:", result.user.email);
+        setCurrentUser(result.user);
+        await fetchUserData(result.user);
+        return; // evita registrar listener duplicado
+      }
+    } catch (error: any) {
+      console.error("Erro ao obter redirect result:", error.code, error.message);
+    }
+
+    // 2️⃣ Depois: registra o listener de mudanças de autenticação
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        console.log("✅ Usuário autenticado:", user.email);
         setCurrentUser(user);
-        setDataLoading(true);
-        try {
-          const data = await api.getUserData(user.uid);
-          setUserData(data);
-          if (data && !data.hasSeenOnboarding) {
-            setOnboardingOpen(true);
-          }
-        } catch (error) {
-          console.error("Falha ao carregar dados do usuário:", error);
-          await api.logout(); // Log out if data fetch fails
-        } finally {
-          setDataLoading(false);
+
+        // 1️⃣ Tenta carregar o documento no Firestore
+        const existingData = await api.getUserData(user.uid);
+
+        // 2️⃣ Se for um novo login (ou seja, doc ainda não existe), cria o perfil base
+        if (!existingData) {
+          const newUserData: UserData = {
+            ...defaultUserData,
+            members: [{ id: "m1", name: user.displayName || "Eu", avatar: "😊", role: "Administrador", title: "Admin" }],
+            familyProfile: {
+              name: user.displayName || "Minha Família",
+              createdAt: new Date().toISOString(),
+            },
+          };
+          await api.updateUserData(user.uid, newUserData);
+          setUserData(newUserData);
+          console.log("🆕 Novo usuário criado no Firestore:", user.uid);
+        } else {
+          setUserData(existingData);
         }
+
+        setActiveScreen("inicio");
       } else {
+        console.log("⚠️ Nenhum usuário autenticado");
         setCurrentUser(null);
         setUserData(null);
       }
       setAuthLoading(false);
     });
+
     return () => unsubscribe();
-  }, []);
+  };
+
+  initAuth();
+}, [fetchUserData]);
+
 
   if (!auth) {
     return <FirebaseNotConfigured />;
@@ -93,15 +145,19 @@ const App: React.FC = () => {
   
   const handleLogout = async () => {
     await api.logout();
-    // The onAuthStateChanged listener will handle state cleanup
+    // O listener onAuthStateChanged cuidará da limpeza do estado e do redirecionamento para Auth
   };
 
-  // --- Data Handlers (now async and using Firebase API) ---
+  // --- Data Handlers ---
+  // Seus manipuladores de dados permanecem em grande parte os mesmos,
+  // mas é uma boa prática garantir que `userData` e `currentUser` não sejam nulos
+  // antes de tentar manipulá-los.
+
   const handleCreateGoal = async (newGoalData: Omit<Goal, 'id' | 'currentAmount'>) => {
-    if (!userData || !currentUser) return;
+    if (!userData || !currentUser) return; // Proteção contra estado nulo
     const newGoal: Goal = {
       ...newGoalData,
-      id: `g${Date.now()}`,
+      id: `g${Date.now()}`, // Considere usar o ID do documento do Firebase para IDs reais do banco de dados
       currentAmount: 0,
     };
     const updatedData = { ...userData, goals: [...userData.goals, newGoal] };
@@ -118,20 +174,39 @@ const App: React.FC = () => {
 
   const handleAddTransaction = async (newTxData: Omit<Transaction, 'id'>) => {
     if (!userData || !currentUser) return;
-    const newTransaction: Transaction = {
-      ...newTxData,
-      id: `t${Date.now()}`,
-    };
-    const updatedData = { ...userData, transactions: [newTransaction, ...userData.transactions] };
-    const savedData = await api.updateUserData(currentUser.uid, updatedData);
-    setUserData(savedData);
+
+    try {
+      const amount = Number(newTxData.amount);
+      if (isNaN(amount)) throw new Error("Valor inválido");
+
+      const newTransaction: Transaction = {
+        ...newTxData,
+        id: `t${Date.now()}`,
+        amount: newTxData.type === "expense" ? -Math.abs(amount) : Math.abs(amount), // garante sinal correto
+        date: newTxData.date || new Date().toISOString(),
+      };
+
+      const updatedData = {
+        ...userData,
+        transactions: [newTransaction, ...(userData.transactions || [])],
+      };
+
+      const savedData = await api.updateUserData(currentUser.uid, updatedData);
+      setUserData(savedData);
+
+      console.log("✅ Transação adicionada:", newTransaction);
+    } catch (error) {
+      console.error("🔥 Erro ao adicionar transação:", error);
+      alert("Erro ao adicionar transação. Verifique os dados.");
+    }
   };
+
 
   const handleAddMember = async (newMemberData: Omit<Member, 'id'>) => {
     if (!userData || !currentUser) return;
     const newMember: Member = {
       ...newMemberData,
-      id: `m${Date.now()}`
+      id: `m${Date.now()}` // Considere usar o ID do documento do Firebase para IDs reais do banco de dados
     };
     const updatedData = { ...userData, members: [...userData.members, newMember] };
     const savedData = await api.updateUserData(currentUser.uid, updatedData);
@@ -156,7 +231,7 @@ const App: React.FC = () => {
     if (!userData || !currentUser) return;
     const newCard: Card = {
       ...newCardData,
-      id: `c${Date.now()}`
+      id: `c${Date.now()}` // Considere usar o ID do documento do Firebase para IDs reais do banco de dados
     };
     const updatedData = { ...userData, cards: [...userData.cards, newCard] };
     const savedData = await api.updateUserData(currentUser.uid, updatedData);
@@ -201,6 +276,7 @@ const App: React.FC = () => {
     updateOnboardingFlag();
   };
   
+  // Renderiza um carregador enquanto a autenticação ou dados do usuário estão sendo carregados
   if (isAuthLoading || (currentUser && isDataLoading)) {
     return (
       <div className="min-h-screen bg-[#F7F8FA] flex items-center justify-center">
@@ -209,21 +285,36 @@ const App: React.FC = () => {
     );
   }
 
+  // Se não há um usuário logado após a verificação, exibe a tela de autenticação
   if (!currentUser) {
     return <Auth />;
   }
   
-  if (!userData) {
+  // Se há um usuário logado, mas os dados do usuário não puderam ser carregados
+  if (!userData && !isDataLoading) { 
       return (
           <div className="min-h-screen bg-[#F7F8FA] flex items-center justify-center">
               <p className="text-lg font-semibold">Erro ao carregar os dados. Tente novamente.</p>
+              {/* Opcionalmente, adicione um botão para tentar novamente */}
           </div>
       );
   }
   
-  const loggedInUserMember = userData.members[0];
+  // Membro do usuário logado (assumindo que o primeiro membro seja o principal)
+  // Usamos optional chaining para evitar erros se userData ou members for null/undefined
+  const loggedInUserMember = userData?.members?.[0];
 
+  // Função para renderizar a tela ativa
   const renderScreen = () => {
+    // Se userData ainda é nulo aqui, significa que está em um estado intermediário
+    // ou houve um erro, então podemos mostrar um carregador ou uma mensagem de erro
+    if (!userData) { 
+        return (
+            <div className="flex items-center justify-center h-full">
+                <p>Preparando dados do usuário...</p> 
+            </div>
+        );
+    }
     switch (activeScreen) {
       case 'inicio':
         return <Dashboard 
@@ -253,6 +344,7 @@ const App: React.FC = () => {
                   onSetupComplete={() => setStartMemberSetup(false)}
                 />;
       default:
+        // Caso padrão, pode ser o Dashboard
         return <Dashboard 
                   transactions={userData.transactions} 
                   members={userData.members} 
@@ -266,6 +358,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#F7F8FA] text-gray-800">
+      {/* Modais são renderizados condicionalmente */}
       {isOnboardingOpen && <OnboardingGuide onFinish={handleOnboardingFinish} />}
       {isPostOnboardingModalOpen && (
         <PostOnboardingModal 
@@ -277,20 +370,26 @@ const App: React.FC = () => {
         <CreateTransactionModal 
           onClose={() => setTransactionModalOpen(false)} 
           onSubmit={handleAddTransaction}
-          members={userData.members}
+          members={userData?.members || []} // Fornece um array vazio como padrão se userData.members for null/undefined
           type={transactionType}
         />
       }
+      {/* Layout principal do aplicativo */}
       <div className="max-w-md mx-auto min-h-screen flex flex-col shadow-lg bg-white">
-        <Header 
-          familyProfile={userData.familyProfile} 
-          onEditProfile={handleEditFamilyProfile}
-          isAdmin={loggedInUserMember?.role === 'Administrador'}
-        />
+        {/* Renderiza Header e BottomNav apenas se os dados do usuário estiverem carregados */}
+        {userData && (
+            <Header 
+              familyProfile={userData.familyProfile} 
+              onEditProfile={handleEditFamilyProfile}
+              isAdmin={loggedInUserMember?.role === 'Administrador'}
+            />
+        )}
         <main className="flex-grow p-4 pb-24">
           {renderScreen()}
         </main>
-        <BottomNav activeScreen={activeScreen} setActiveScreen={setActiveScreen} />
+        {userData && (
+            <BottomNav activeScreen={activeScreen} setActiveScreen={setActiveScreen} />
+        )}
       </div>
     </div>
   );
